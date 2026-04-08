@@ -1,0 +1,35 @@
+diff --git a/include/ck/ck.hpp b/include/ck/ck.hpp
+index 794c6f4e2..77a818a5e 100644
+--- a/include/ck/ck.hpp
++++ b/include/ck/ck.hpp
+@@ -78,7 +78,7 @@
+ #define CK_BUFFER_RESOURCE_3RD_DWORD -1
+ #elif defined(__gfx803__) || defined(__gfx900__) || defined(__gfx906__) || defined(__gfx9__)
+ #define CK_BUFFER_RESOURCE_3RD_DWORD 0x00020000
+-#elif defined(__gfx103__)
++#elif defined(__gfx101__) || defined(__gfx103__)
+ #define CK_BUFFER_RESOURCE_3RD_DWORD 0x31014000
+ #elif defined(__gfx11__) || defined(__gfx12__)
+ #define CK_BUFFER_RESOURCE_3RD_DWORD 0x31004000
+@@ -88,6 +88,8 @@
+ #ifndef __HIP_DEVICE_COMPILE__                   // for host code, define nothing
+ #elif defined(__gfx803__) || defined(__gfx900__) // for GPU code
+ #define CK_USE_AMD_V_MAC_F32
++#elif defined(__gfx101__) // RDNA1: v_fmac only, no dot instructions
++#define CK_USE_AMD_V_FMAC_F32
+ #elif defined(__gfx906__) || defined(__gfx9__) || defined(__gfx103__) // for GPU code
+ #define CK_USE_AMD_V_FMAC_F32
+ #define CK_USE_AMD_V_DOT2_F32_F16
+diff --git a/include/ck_tile/core/config.hpp b/include/ck_tile/core/config.hpp
+index 3a1ddd8ab..d775ee431 100644
+--- a/include/ck_tile/core/config.hpp
++++ b/include/ck_tile/core/config.hpp
+@@ -200,7 +200,7 @@
+ #elif defined(__gfx803__) || defined(__gfx900__) || defined(__gfx906__) || \
+     defined(__gfx9__) // for GPU code
+ #define CK_TILE_BUFFER_RESOURCE_3RD_DWORD 0x00020000
+-#elif defined(__gfx103__) // for GPU code
++#elif defined(__gfx101__) || defined(__gfx103__) // for GPU code
+ #define CK_TILE_BUFFER_RESOURCE_3RD_DWORD 0x31014000
+ #elif defined(__gfx11__) || defined(__gfx12__) // for GPU code
+ #define CK_TILE_BUFFER_RESOURCE_3RD_DWORD 0x31004000
