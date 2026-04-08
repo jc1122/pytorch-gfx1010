@@ -2,6 +2,23 @@
 
 Patches and build script to compile **PyTorch 2.9.1** for AMD gfx1010 (Navi 10, RX 5700/5700 XT).
 
+## Status
+
+**PyTorch + rocBLAS are fully functional on gfx1010** for practical deep learning:
+matmul, Conv2d, LayerNorm, GroupNorm, attention, AdamW — all work out of the box.
+
+One known issue: `nn.BatchNorm2d` backward (training mode) crashes due to a MIOpen kernel
+using DPP instructions not valid on RDNA1. Apply the workaround with a single import:
+
+```python
+import workarounds  # monkey-patches nn.BatchNorm2d globally — safe to use anywhere
+```
+
+This is not a hardware limitation — all required arithmetic works on gfx1010. It is a
+MIOpen software issue specific to the BN backward kernel.
+
+---
+
 gfx1010 is not in any official PyTorch ROCm wheel. These patches fix compilation errors in the
 [composable_kernel](https://github.com/ROCmSoftwarePlatform/composable_kernel) submodule.
 
