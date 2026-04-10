@@ -5,8 +5,5 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pytorch-gfx1010-workarounds"
 version = "0.1.0"
-description = "BatchNorm2d workaround for AMD gfx1010 (RX 5700 XT / RDNA1)"
+description = "Automatic PyTorch workarounds for AMD gfx1010 (RX 5700 XT / RDNA1)"
 requires-python = ">=3.12"
-
-[tool.setuptools.packages.find]
-include = ["workarounds*"]

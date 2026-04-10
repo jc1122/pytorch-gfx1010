@@ -7,15 +7,13 @@ Patches and build script to compile **PyTorch 2.9.1** for AMD gfx1010 (Navi 10, 
 **PyTorch + rocBLAS are fully functional on gfx1010** for practical deep learning:
 matmul, Conv2d, LayerNorm, GroupNorm, attention, AdamW — all work out of the box.
 
-One known issue: `nn.BatchNorm2d` backward (training mode) crashes due to a MIOpen kernel
-using DPP instructions not valid on RDNA1. Apply the workaround with a single import:
+Known gfx1010 issues are handled automatically by the companion package installed by
+`install.sh`. The workarounds autoload on first `import torch`, so user code does not need
+to import anything extra.
 
-```python
-import workarounds  # monkey-patches nn.BatchNorm2d globally — safe to use anywhere
-```
-
-This is not a hardware limitation — all required arithmetic works on gfx1010. It is a
-MIOpen software issue specific to the BN backward kernel.
+This is not a hardware limitation — all required arithmetic works on gfx1010. The remaining
+problems are software gaps in MIOpen / rocprim for gfx1010, and the installed workarounds
+patch those paths automatically inside the Python environment.
 
 ---
 
@@ -45,6 +43,8 @@ For matmul support (rocBLAS), see the companion repo: [rocblas-gfx1010](https://
 | LayerNorm, GroupNorm | OK | |
 | scaled_dot_product_attention | OK | |
 | AdamW / SGD optimizer step | OK | |
+| nonzero / masked_select / bool indexing / unique / tensor repr | AUTO-WORKAROUND | CPU fallback, result moved back to CUDA |
+| LSTM / GRU | AUTO-WORKAROUND | Disables MIOpen/cudnn path so PyTorch fallback runs on gfx1010 |
 | BatchNorm2d forward / inference | OK | |
 | BatchNorm2d backward (training) | WORKAROUND | MIOpen BN backward uses DPP row_bcast:15/31, not valid on gfx1010 |
 
@@ -62,6 +62,20 @@ from workarounds.batchnorm_gfx1010 import BatchNorm2dGFX1010 as BatchNorm2d
 ```
 
 Alternatively, `nn.GroupNorm` works natively and is often preferred for small batch sizes.
+
+## Automatic runtime patching
+
+`install.sh` drops a small `.pth` startup hook into the target venv's `site-packages`.
+That hook waits for `torch` to be imported, then automatically imports `workarounds` to
+patch the known gfx1010 failure paths:
+
+- `nn.BatchNorm2d` backward
+- `torch.nonzero`
+- `torch.masked_select`
+- boolean tensor indexing
+- tensor `repr`
+- `torch.unique`
+- `nn.LSTM` / `nn.GRU` by disabling the broken MIOpen RNN path
 
 ## Build instructions
 

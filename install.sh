@@ -62,12 +62,22 @@ pip install --no-deps "$WHEEL_URL"
 echo "Installing pytorch-gfx1010-workarounds ..."
 pip install "git+$REPO_URL"
 
+# ── Enable autoload in this venv ──────────────────────────────────────────────
+
+AUTOLOAD_PTH=$("$VENV/bin/python" - <<'PYEOF'
+import sysconfig
+print(sysconfig.get_path("purelib"))
+PYEOF
+)
+AUTOLOAD_PTH="$AUTOLOAD_PTH/pytorch_gfx1010_autoload.pth"
+echo "import pytorch_gfx1010_autoload" > "$AUTOLOAD_PTH"
+echo "Installed autoload hook: $AUTOLOAD_PTH"
+
 # ── Verify ────────────────────────────────────────────────────────────────────
 
 echo ""
 echo "=== Running smoke tests ==="
 python - <<'PYEOF'
-import workarounds
 import torch, torch.nn as nn, sys
 
 ok = True
@@ -81,6 +91,7 @@ def check(name, fn):
         ok = False
 
 check("GPU visible",      lambda: (assert_gpu := torch.cuda.is_available()) or (_ := (_ for _ in ()).throw(AssertionError("no GPU"))))
+check("autoload active",  lambda: (not torch.backends.cudnn.enabled) or (_ := (_ for _ in ()).throw(AssertionError("gfx1010 autoload inactive"))))
 check("matmul f32",       lambda: torch.matmul(torch.randn(64,64,device='cuda'), torch.randn(64,64,device='cuda')))
 check("nonzero",          lambda: torch.nonzero(torch.tensor([0.,1.,2.],device='cuda')))
 check("masked_select",    lambda: torch.masked_select(torch.tensor([1.,-1.],device='cuda'), torch.tensor([True,False],device='cuda')))
@@ -98,4 +109,4 @@ PYEOF
 echo ""
 echo "=== Install complete ==="
 echo "Activate with:  source $VENV/bin/activate"
-echo "Then add to your scripts:  import workarounds"
+echo "PyTorch gfx1010 workarounds autoload on first import of torch in this venv."
