@@ -17,6 +17,10 @@ VENV=${VENV:-$HOME/.venv/gfx1010-pytorch}
 ROCM_PATH=${ROCM_PATH:-/opt/rocm}
 WHEEL_URL="https://github.com/jc1122/pytorch-gfx1010/releases/download/v2.9.1/torch-2.9.1a0+gitd38164a-cp312-cp312-linux_x86_64.whl"
 REPO_URL="https://github.com/jc1122/pytorch-gfx1010.git"
+ROCBLAS_INSTALL_URL=${ROCBLAS_INSTALL_URL:-https://raw.githubusercontent.com/jc1122/rocblas-gfx1010/main/install.sh}
+ROCBLAS_INSTALL_MODE=${ROCBLAS_INSTALL_MODE:-release}
+ROCBLAS_ASSET_URL=${ROCBLAS_ASSET_URL:-}
+ROCBLAS_SHA256_URL=${ROCBLAS_SHA256_URL:-}
 
 # ── Preflight checks ──────────────────────────────────────────────────────────
 
@@ -36,10 +40,36 @@ fi
 TENSILE_YAML="$ROCM_PATH/lib/rocblas/library/TensileLibrary_lazy_gfx1010.yaml"
 if [ ! -f "$TENSILE_YAML" ]; then
     echo ""
-    echo "WARNING: rocBLAS gfx1010 kernels not found at $TENSILE_YAML"
-    echo "  matmul (Linear, BMM, etc.) will not work without them."
-    echo "  Install from: https://github.com/jc1122/rocblas-gfx1010"
+    echo "rocBLAS gfx1010 kernels not found at $TENSILE_YAML"
+    echo "Installing rocBLAS gfx1010 runtime ..."
     echo ""
+
+    ROCBLAS_SCRIPT=$(mktemp)
+    trap 'rm -f "$ROCBLAS_SCRIPT"' EXIT
+    curl -fsSL "$ROCBLAS_INSTALL_URL" -o "$ROCBLAS_SCRIPT"
+    chmod +x "$ROCBLAS_SCRIPT"
+
+    if [ -n "$ROCBLAS_ASSET_URL" ] && [ -n "$ROCBLAS_SHA256_URL" ]; then
+        ROCM_PATH="$ROCM_PATH" \
+        MODE="$ROCBLAS_INSTALL_MODE" \
+        ASSET_URL="$ROCBLAS_ASSET_URL" \
+        SHA256_URL="$ROCBLAS_SHA256_URL" \
+        "$ROCBLAS_SCRIPT"
+    elif [ -n "$ROCBLAS_ASSET_URL" ]; then
+        ROCM_PATH="$ROCM_PATH" \
+        MODE="$ROCBLAS_INSTALL_MODE" \
+        ASSET_URL="$ROCBLAS_ASSET_URL" \
+        "$ROCBLAS_SCRIPT"
+    else
+        ROCM_PATH="$ROCM_PATH" \
+        MODE="$ROCBLAS_INSTALL_MODE" \
+        "$ROCBLAS_SCRIPT"
+    fi
+
+    if [ ! -f "$TENSILE_YAML" ]; then
+        echo "ERROR: rocBLAS gfx1010 install did not produce $TENSILE_YAML"
+        exit 1
+    fi
 fi
 
 # ── Create venv ───────────────────────────────────────────────────────────────
@@ -56,6 +86,18 @@ source "$VENV/bin/activate"
 
 echo "Installing PyTorch 2.9.1 (gfx1010 wheel) ..."
 pip install --no-deps "$WHEEL_URL"
+
+echo "Installing Python runtime dependencies ..."
+pip install \
+    "setuptools" \
+    "typing_extensions" \
+    "filelock" \
+    "sympy" \
+    "networkx" \
+    "jinja2" \
+    "fsspec" \
+    "pyyaml" \
+    "numpy<2"
 
 # ── Install workarounds ───────────────────────────────────────────────────────
 

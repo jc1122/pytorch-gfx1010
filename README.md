@@ -10,18 +10,25 @@ Use the installer:
 curl -sSL https://raw.githubusercontent.com/jc1122/pytorch-gfx1010/main/install.sh | bash
 ```
 
-Do **not** install the release wheel by itself unless you also know how to install the
-gfx1010 workaround package and autoload hook manually. The wheel alone does not enable the
-runtime fixes for gfx1010.
+The installer will auto-install the required gfx1010 rocBLAS runtime if it is missing.
+On a first-time setup this may require `sudo`, because the rocBLAS runtime is installed
+system-wide into `/opt/rocm`.
+
+Do **not** install the release wheel by itself unless you also know how to install both the
+gfx1010 rocBLAS runtime and the gfx1010 PyTorch workaround/autoload pieces manually. The
+wheel alone does not enable the full runtime fixes for gfx1010.
 
 ## Status
 
 **PyTorch + rocBLAS are fully functional on gfx1010** for practical deep learning:
 matmul, Conv2d, LayerNorm, GroupNorm, attention, AdamW — all work out of the box.
 
-Known gfx1010 issues are handled automatically by the companion package installed by
-`install.sh`. The workarounds autoload on first `import torch`, so user code does not need
-to import anything extra.
+`install.sh` handles both layers of compatibility:
+
+- it installs the gfx1010 rocBLAS runtime if needed
+- it installs the PyTorch workaround package and autoload hook
+
+After install, user code does not need to import anything extra.
 
 This is not a hardware limitation — all required arithmetic works on gfx1010. The remaining
 problems are software gaps in MIOpen / rocprim for gfx1010, and the installed workarounds
