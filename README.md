@@ -18,7 +18,9 @@ system-wide into `/opt/rocm`.
 
 Do **not** install the release wheel by itself unless you also know how to install both the
 gfx1010 rocBLAS runtime and the gfx1010 PyTorch workaround/autoload pieces manually. The
-wheel alone does not enable the full runtime fixes for gfx1010.
+wheel alone does not enable the full runtime fixes for gfx1010. If you do install the wheel
+directly, first CUDA use now fails fast with a clear error explaining that the gfx1010
+rocBLAS runtime is missing and pointing you to the supported installer.
 
 ## Status
 
