@@ -2,6 +2,8 @@
 
 Patches and build script to compile **PyTorch 2.9.1** for AMD gfx1010 (Navi 10, RX 5700/5700 XT).
 
+Run the torch installer only. It installs the required gfx1010 rocBLAS layer automatically.
+
 ## Install
 
 Use the installer:
