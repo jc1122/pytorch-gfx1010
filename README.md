@@ -2,6 +2,18 @@
 
 Patches and build script to compile **PyTorch 2.9.1** for AMD gfx1010 (Navi 10, RX 5700/5700 XT).
 
+## Install
+
+Use the installer:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/jc1122/pytorch-gfx1010/main/install.sh | bash
+```
+
+Do **not** install the release wheel by itself unless you also know how to install the
+gfx1010 workaround package and autoload hook manually. The wheel alone does not enable the
+runtime fixes for gfx1010.
+
 ## Status
 
 **PyTorch + rocBLAS are fully functional on gfx1010** for practical deep learning:
