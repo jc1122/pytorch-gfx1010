@@ -18,6 +18,14 @@ Currently patches:
 
 - torch.Tensor.__repr__       -> CPU fallback for printing
   (tensor printing calls masked_select internally)
+
+- torch.unique / Tensor.unique -> CPU fallback
+  (same rocprim kernel issue; radix-sort / scan path hits missing gfx1010 binary)
+
+- torch.backends.cudnn.enabled = False  (applied at import time)
+  (MIOpen's composable_kernel JIT compilation for LSTM/GRU fails on gfx1010:
+  CK config.hpp doesn't recognise gfx1010, raises "Need to define (only) one GPU
+  target". Disabling cudnn makes LSTM/GRU fall back to PyTorch's own implementation.)
 """
 import torch
 import torch.nn as nn
@@ -96,3 +104,37 @@ def _repr_gfx1010(self):
     return _orig_repr(self)
 
 torch.Tensor.__repr__ = _repr_gfx1010
+
+# ── unique ────────────────────────────────────────────────────────────────────
+# torch.unique uses a radix-sort/scan path via rocprim; same missing gfx1010
+# kernel binary.  CPU fallback, result moved back to original device.
+
+_orig_unique = torch.unique
+
+def _unique_gfx1010(input, sorted=True, return_inverse=False, return_counts=False, dim=None):
+    if input.is_cuda:
+        result = _orig_unique(input.cpu(), sorted=sorted,
+                              return_inverse=return_inverse,
+                              return_counts=return_counts,
+                              dim=dim)
+        if isinstance(result, tuple):
+            return tuple(t.to(input.device) for t in result)
+        return result.to(input.device)
+    return _orig_unique(input, sorted=sorted, return_inverse=return_inverse,
+                        return_counts=return_counts, dim=dim)
+
+torch.unique = _unique_gfx1010
+
+_orig_tensor_unique = torch.Tensor.unique
+
+def _tensor_unique_gfx1010(self, sorted=True, return_inverse=False, return_counts=False, dim=None):
+    return _unique_gfx1010(self, sorted=sorted, return_inverse=return_inverse,
+                           return_counts=return_counts, dim=dim)
+
+torch.Tensor.unique = _tensor_unique_gfx1010
+
+# ── LSTM / GRU (MIOpen CK JIT fails on gfx1010) ──────────────────────────────
+# MIOpen's composable_kernel JIT path for RNN doesn't recognise gfx1010 and
+# raises a compile error.  Disabling cudnn makes PyTorch fall back to its own
+# pure-HIP RNN implementation which compiles correctly for gfx1010.
+torch.backends.cudnn.enabled = False

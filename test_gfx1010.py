@@ -212,6 +212,35 @@ def test_tensor_repr():
     assert "cuda" in s, f"device not in repr: {s}"
 
 
+def test_unique():
+    import workarounds  # noqa: F401
+    a = torch.tensor([3., 1., 2., 1., 3.], device=DEVICE)
+    u = torch.unique(a, sorted=True)
+    assert u.tolist() == [1.0, 2.0, 3.0]
+    assert u.device.type == "cuda"
+
+
+def test_lstm():
+    import workarounds  # noqa: F401
+    lstm = nn.LSTM(input_size=16, hidden_size=32, num_layers=1, batch_first=True).to(DEVICE)
+    x = torch.randn(4, 10, 16, device=DEVICE)
+    out, (h, c) = lstm(x)
+    assert out.shape == (4, 10, 32)
+    loss = out.sum()
+    loss.backward()
+    assert lstm.weight_ih_l0.grad is not None
+
+
+def test_gru():
+    import workarounds  # noqa: F401
+    gru = nn.GRU(input_size=16, hidden_size=32, num_layers=1, batch_first=True).to(DEVICE)
+    x = torch.randn(4, 10, 16, device=DEVICE)
+    out, h = gru(x)
+    assert out.shape == (4, 10, 32)
+    out.sum().backward()
+    assert gru.weight_ih_l0.grad is not None
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 ALL_TESTS = [
@@ -235,6 +264,9 @@ ALL_TESTS = [
     test_masked_select,
     test_boolean_indexing,
     test_tensor_repr,
+    test_unique,
+    test_lstm,
+    test_gru,
 ]
 
 if __name__ == "__main__":
