@@ -14,7 +14,8 @@ Currently patches:
   because target_arch enum in rocprim doesn't include gfx1010)
 
 - torch.masked_select / Tensor[bool_mask] -> CPU fallback
-  (same root cause as nonzero — rocprim kernel missing for gfx1010)
+  (same root cause as nonzero — rocprim kernel missing for gfx1010.
+  Handles both direct boolean indexing and combined slicing/masking.)
 
 - torch.Tensor.__repr__       -> CPU fallback for printing
   (tensor printing calls masked_select internally)
@@ -76,14 +77,30 @@ def _masked_select_gfx1010(input, mask):
 torch.masked_select = _masked_select_gfx1010
 
 # ── boolean indexing: tensor[bool_mask] ───────────────────────────────────────
+# Handles both direct: tensor[mask] and combined: tensor[:, mask]
+# rocprim DeviceSelect kernel missing; CPU fallback.
 
 _orig_getitem = torch.Tensor.__getitem__
 
+def _has_cuda_bool_tensor(idx):
+    if isinstance(idx, torch.Tensor):
+        return idx.is_cuda and idx.dtype == torch.bool
+    if isinstance(idx, tuple):
+        return any(_has_cuda_bool_tensor(x) for x in idx)
+    return False
+
+def _to_cpu(idx):
+    if isinstance(idx, torch.Tensor) and idx.is_cuda:
+        return idx.cpu()
+    if isinstance(idx, tuple):
+        return tuple(_to_cpu(x) for x in idx)
+    if isinstance(idx, list):
+        return [_to_cpu(x) for x in idx]
+    return idx
+
 def _getitem_gfx1010(self, idx):
-    if (self.is_cuda
-            and isinstance(idx, torch.Tensor)
-            and idx.dtype == torch.bool):
-        return _orig_getitem(self.cpu(), idx.cpu()).to(self.device)
+    if self.is_cuda and _has_cuda_bool_tensor(idx):
+        return _orig_getitem(self.cpu(), _to_cpu(idx)).to(self.device)
     return _orig_getitem(self, idx)
 
 torch.Tensor.__getitem__ = _getitem_gfx1010

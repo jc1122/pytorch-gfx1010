@@ -191,7 +191,7 @@ def test_nonzero():
 def test_masked_select():
     import workarounds  # noqa: F401
     a = torch.tensor([1., -1., 2., -2.], device=DEVICE)
-    mask = a > 0
+    mask = torch.tensor([True, False, True, False], device=DEVICE)
     result = torch.masked_select(a, mask)
     assert result.tolist() == [1.0, 2.0]
     assert result.device.type == "cuda"
@@ -199,10 +199,19 @@ def test_masked_select():
 
 def test_boolean_indexing():
     import workarounds  # noqa: F401
+    # Direct
     a = torch.tensor([1., -1., 2., -2.], device=DEVICE)
     result = a[a > 0]
     assert result.tolist() == [1.0, 2.0]
     assert result.device.type == "cuda"
+
+    # Slicing + Mask (used by torch_geometric edge_index[:, mask])
+    b = torch.tensor([[0, 1, 2], [1, 2, 0]], device=DEVICE)
+    mask = torch.tensor([True, False, True], device=DEVICE)
+    result2 = b[:, mask]
+    assert result2.tolist() == [[0, 2], [1, 0]]
+    assert result2.device.type == "cuda"
+
 
 
 def test_tensor_repr():

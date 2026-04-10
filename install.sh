@@ -137,6 +137,7 @@ check("autoload active",  lambda: (not torch.backends.cudnn.enabled) or (_ := (_
 check("matmul f32",       lambda: torch.matmul(torch.randn(64,64,device='cuda'), torch.randn(64,64,device='cuda')))
 check("nonzero",          lambda: torch.nonzero(torch.tensor([0.,1.,2.],device='cuda')))
 check("masked_select",    lambda: torch.masked_select(torch.tensor([1.,-1.],device='cuda'), torch.tensor([True,False],device='cuda')))
+check("boolean index",    lambda: (t:=torch.randn(2,4,device='cuda'), m:=torch.tensor([True,False,True,False],device='cuda'), t[:, m]))
 check("tensor repr",      lambda: repr(torch.tensor([1.,2.],device='cuda')))
 check("BatchNorm2d bwd",  lambda: (bn:=nn.BatchNorm2d(4).cuda(), x:=torch.randn(2,4,8,8,device='cuda',requires_grad=True), bn(x).sum().backward()))
 
