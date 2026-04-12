@@ -147,10 +147,9 @@ def test_groupnorm_backward():
     assert x.grad is not None
 
 
-# ── BatchNorm2d (requires workarounds) ───────────────────────────────────────
+# ── BatchNorm2d (native PyTorch gfx1010 patch) ───────────────────────────────
 
 def test_batchnorm2d_forward_backward():
-    import workarounds  # noqa: F401 — applies monkey-patch
     bn = nn.BatchNorm2d(8).to(DEVICE)
     x = torch.randn(2, 8, 16, 16, device=DEVICE, requires_grad=True)
     loss = bn(x).sum()
@@ -160,7 +159,6 @@ def test_batchnorm2d_forward_backward():
 
 
 def test_batchnorm2d_eval():
-    import workarounds  # noqa: F401
     bn = nn.BatchNorm2d(8).to(DEVICE).eval()
     x = torch.randn(2, 8, 16, 16, device=DEVICE)
     out = bn(x)

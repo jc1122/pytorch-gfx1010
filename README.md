@@ -35,7 +35,7 @@ matmul, Conv2d, LayerNorm, GroupNorm, attention, AdamW — all work out of the b
 After install, user code does not need to import anything extra.
 
 This is not a hardware limitation — all required arithmetic works on gfx1010. The remaining
-problems are software gaps in MIOpen / rocprim for gfx1010, and the installed workarounds
+problems are mostly rocPRIM selection/sort gaps for gfx1010, and the installed workarounds
 patch those paths automatically inside the Python environment.
 
 ---
@@ -68,24 +68,25 @@ For matmul support (rocBLAS), see the companion repo: [rocblas-gfx1010](https://
 | AdamW / SGD optimizer step | OK | |
 | nonzero / masked_select / bool indexing / unique / tensor repr | AUTO-WORKAROUND | CPU fallback, result moved back to CUDA |
 | scatter_add / PyG sum+mean aggregation | NATIVE PATCH | Common `dim=0` path uses compiled GPU `index_add_`; unsupported layouts still fall back through the Python workaround |
-| LSTM / GRU | AUTO-WORKAROUND | Disables MIOpen/cudnn path so PyTorch fallback runs on gfx1010 |
+| LSTM / GRU | NATIVE PATCH | gfx1010 skips broken MIOpen RNN JIT and uses PyTorch's native GPU implementation |
 | BatchNorm2d forward / inference | OK | |
-| BatchNorm2d backward (training) | WORKAROUND | MIOpen BN backward uses DPP row_bcast:15/31, not valid on gfx1010 |
+| BatchNorm2d backward (training) | NATIVE PATCH | gfx1010 skips broken MIOpen BN kernels and uses PyTorch's native GPU implementation |
 
-## BatchNorm2d workaround
+## BatchNorm2d and RNN native patches
 
-MIOpen's BN backward kernel uses `v_add_f32 ... row_bcast:15/31` (GCN-era DPP subgroup
-broadcasts not available on gfx1010 RDNA1). Forward pass works fine; only the backward
-pass (gradient computation during training) fails with `miopenStatusUnknownError`.
+MIOpen's BN training kernels use `v_add_f32 ... row_bcast:15/31` (GCN-era DPP subgroup
+broadcasts not available on gfx1010 RDNA1), and MIOpen's RNN JIT path does not recognise
+gfx1010 in its CK config. The native PyTorch patch skips those MIOpen paths on gfx1010:
+BatchNorm uses PyTorch's native GPU BatchNorm kernels, and LSTM/GRU use PyTorch's native
+GPU RNN implementation.
 
-A drop-in replacement is provided in `workarounds/batchnorm_gfx1010.py`:
+The older drop-in BatchNorm module is still kept in `workarounds/batchnorm_gfx1010.py` for
+manual fallback testing:
 
 ```python
 from workarounds.batchnorm_gfx1010 import BatchNorm2dGFX1010 as BatchNorm2d
 # Use exactly like nn.BatchNorm2d -- same constructor args, same behavior
 ```
-
-Alternatively, `nn.GroupNorm` works natively and is often preferred for small batch sizes.
 
 ## Automatic runtime patching
 
@@ -93,14 +94,12 @@ Alternatively, `nn.GroupNorm` works natively and is often preferred for small ba
 That hook waits for `torch` to be imported, then automatically imports `workarounds` to
 patch the known gfx1010 failure paths:
 
-- `nn.BatchNorm2d` backward
 - `torch.nonzero`
 - `torch.masked_select`
 - boolean tensor indexing
 - tensor `repr`
 - `torch.unique`
-- `torch.scatter_add` / `Tensor.scatter_add[_]` for PyG-style aggregation
-- `nn.LSTM` / `nn.GRU` by disabling the broken MIOpen RNN path
+- unsupported `torch.scatter_add` / `Tensor.scatter_add[_]` layouts
 
 The native `scatter_add` patch routes the common PyG `dim=0` aggregation shape
 through compiled GPU `index_add_`, which works on gfx1010. The Python workaround
@@ -117,6 +116,7 @@ git -C pytorch submodule update --init --recursive
 # 2. Apply patches
 patch -p1 -d pytorch/third_party/composable_kernel < patches/composable_kernel-gfx1010.patch
 patch -p1 -d pytorch < patches/pytorch-scatter-add-gfx1010.patch
+patch -p1 -d pytorch < patches/pytorch-bn-rnn-gfx1010.patch
 
 # 3. Create venv and build
 python3 -m venv .venv
@@ -145,3 +145,10 @@ hook. On ROCm gfx1010 only, the common PyG `dim=0` scatter-add shape is routed t
 `index_add_`, which runs on the GPU and avoids the failing generic HIP scatter kernel.
 Unsupported scatter layouts fall through to PyTorch's existing implementation. CUDA builds and
 other ROCm GPU architectures are unchanged.
+
+### PyTorch BatchNorm and RNN dispatch -- `aten/src/ATen/native/Normalization.cpp`, `aten/src/ATen/native/RNN.cpp`
+
+On ROCm gfx1010 only, BatchNorm backend selection skips MIOpen and uses PyTorch's native GPU
+BatchNorm kernels. RNN dispatch also skips MIOpen for LSTM/GRU/RNN so PyTorch's native GPU
+implementation runs with `torch.backends.cudnn.enabled` left enabled. Other ROCm GPU
+architectures are unchanged.

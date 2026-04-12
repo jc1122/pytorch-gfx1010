@@ -133,13 +133,15 @@ def check(name, fn):
         ok = False
 
 check("GPU visible",      lambda: (assert_gpu := torch.cuda.is_available()) or (_ := (_ for _ in ()).throw(AssertionError("no GPU"))))
-check("autoload active",  lambda: (not torch.backends.cudnn.enabled) or (_ := (_ for _ in ()).throw(AssertionError("gfx1010 autoload inactive"))))
+check("autoload active",  lambda: ("workarounds" in sys.modules) or (_ := (_ for _ in ()).throw(AssertionError("gfx1010 autoload inactive"))))
+check("MIOpen enabled",   lambda: torch.backends.cudnn.enabled or (_ := (_ for _ in ()).throw(AssertionError("MIOpen unexpectedly disabled"))))
 check("matmul f32",       lambda: torch.matmul(torch.randn(64,64,device='cuda'), torch.randn(64,64,device='cuda')))
 check("nonzero",          lambda: torch.nonzero(torch.tensor([0.,1.,2.],device='cuda')))
 check("masked_select",    lambda: torch.masked_select(torch.tensor([1.,-1.],device='cuda'), torch.tensor([True,False],device='cuda')))
 check("boolean index",    lambda: (t:=torch.randn(2,4,device='cuda'), m:=torch.tensor([True,False,True,False],device='cuda'), t[:, m]))
 check("tensor repr",      lambda: repr(torch.tensor([1.,2.],device='cuda')))
 check("BatchNorm2d bwd",  lambda: (bn:=nn.BatchNorm2d(4).cuda(), x:=torch.randn(2,4,8,8,device='cuda',requires_grad=True), bn(x).sum().backward()))
+check("LSTM bwd",         lambda: (m:=nn.LSTM(8,16,batch_first=True).cuda(), x:=torch.randn(2,5,8,device='cuda',requires_grad=True), y:=m(x)[0], y.sum().backward()))
 
 if ok:
     print("\nAll checks passed.")

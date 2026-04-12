@@ -6,9 +6,6 @@ Import this module to automatically apply all gfx1010 workarounds:
     import workarounds
 
 Currently patches:
-- torch.nn.BatchNorm2d        -> BatchNorm2dGFX1010
-  (MIOpen BN kernel uses DPP row_bcast:15/31, not valid on gfx1010 RDNA1)
-
 - torch.nonzero / Tensor.nonzero -> CPU fallback
   (rocprim DeviceSelect/DeviceReduce kernels not compiled for gfx1010
   because target_arch enum in rocprim doesn't include gfx1010)
@@ -24,20 +21,12 @@ Currently patches:
   (same rocprim kernel issue; radix-sort / scan path hits missing gfx1010 binary)
 
 - torch.scatter_add / Tensor.scatter_add[_] -> GPU index_add_ substitute
-  for common dim-0 reductions, CPU fallback otherwise
-  (native HIP scatter kernel can hit invalid-device-function on gfx1010)
+  keeps unsupported scatter layouts on a CPU fallback
+  (the common PyG dim-0 path is handled by the native PyTorch gfx1010 patch)
 
-- torch.backends.cudnn.enabled = False  (applied at import time)
-  (MIOpen's composable_kernel JIT compilation for LSTM/GRU fails on gfx1010:
-  CK config.hpp doesn't recognise gfx1010, raises "Need to define (only) one GPU
-  target". Disabling cudnn makes LSTM/GRU fall back to PyTorch's own implementation.)
+BatchNorm2d and LSTM/GRU are handled by native PyTorch gfx1010 dispatch patches.
 """
 import torch
-import torch.nn as nn
-from .batchnorm_gfx1010 import BatchNorm2dGFX1010
-
-# ── BatchNorm2d ────────────────────────────────────────────────────────────────
-nn.BatchNorm2d = BatchNorm2dGFX1010
 
 # ── nonzero ───────────────────────────────────────────────────────────────────
 # rocprim's device-level scan kernels (used by nonzero / masked_select /
@@ -155,10 +144,9 @@ def _tensor_unique_gfx1010(self, sorted=True, return_inverse=False, return_count
 torch.Tensor.unique = _tensor_unique_gfx1010
 
 # ── scatter_add ───────────────────────────────────────────────────────────────
-# PyG aggregation uses Tensor.scatter_add_ for mean/sum reductions.  On gfx1010
-# the native HIP scatter kernel can fail with hipErrorInvalidDeviceFunction.
-# For the common PyG dim-0 reduction shape, route through index_add_, which
-# runs natively on gfx1010. Fall back to CPU for less common scatter layouts.
+# PyG aggregation uses Tensor.scatter_add_ for mean/sum reductions. The common
+# dim-0 reduction shape is handled by the native PyTorch gfx1010 patch. Keep a
+# CPU fallback for less common scatter layouts that still hit the generic kernel.
 
 _orig_scatter_add = torch.scatter_add
 _orig_tensor_scatter_add = torch.Tensor.scatter_add
@@ -180,29 +168,20 @@ def _scatter_add_index_for_dim0(index, src):
         return None
     return index[(slice(None),) + (0,) * (index.dim() - 1)]
 
-def _scatter_add_via_index_add(input, dim, index, src):
+def _is_native_gfx1010_scatter_add_path(input, dim, index, src):
     dim = input.dim() + dim if dim < 0 else dim
     if dim != 0:
-        return None
+        return False
     if input.dim() != src.dim():
-        return None
+        return False
     if input.shape[1:] != src.shape[1:]:
-        return None
-    index_1d = _scatter_add_index_for_dim0(index, src)
-    if index_1d is None:
-        return None
-    result = input.clone()
-    result.index_add_(0, index_1d, src)
-    return result
+        return False
+    return _scatter_add_index_for_dim0(index, src) is not None
 
 def _torch_scatter_add_gfx1010(input, dim, index, src, *, out=None):
     if input.is_cuda:
-        result = _scatter_add_via_index_add(input, dim, index, src)
-        if result is not None:
-            if out is not None:
-                out.copy_(result)
-                return out
-            return result
+        if _is_native_gfx1010_scatter_add_path(input, dim, index, src):
+            return _orig_scatter_add(input, dim, index, src, out=out)
         cpu_input, cpu_index, cpu_src = _scatter_add_args_to_cpu(input, index, src)
         result = _orig_scatter_add(cpu_input, dim, cpu_index, cpu_src)
         result = result.to(input.device)
@@ -214,19 +193,16 @@ def _torch_scatter_add_gfx1010(input, dim, index, src, *, out=None):
 
 def _tensor_scatter_add_gfx1010(self, dim, index, src):
     if self.is_cuda:
-        result = _scatter_add_via_index_add(self, dim, index, src)
-        if result is not None:
-            return result
+        if _is_native_gfx1010_scatter_add_path(self, dim, index, src):
+            return _orig_tensor_scatter_add(self, dim, index, src)
         cpu_self, cpu_index, cpu_src = _scatter_add_args_to_cpu(self, index, src)
         return _orig_tensor_scatter_add(cpu_self, dim, cpu_index, cpu_src).to(self.device)
     return _orig_tensor_scatter_add(self, dim, index, src)
 
 def _tensor_scatter_add_inplace_gfx1010(self, dim, index, src):
     if self.is_cuda:
-        result = _scatter_add_via_index_add(self, dim, index, src)
-        if result is not None:
-            self.copy_(result)
-            return self
+        if _is_native_gfx1010_scatter_add_path(self, dim, index, src):
+            return _orig_tensor_scatter_add_(self, dim, index, src)
         cpu_self, cpu_index, cpu_src = _scatter_add_args_to_cpu(self, index, src)
         result = _orig_tensor_scatter_add_(cpu_self, dim, cpu_index, cpu_src).to(self.device)
         self.copy_(result)
@@ -236,9 +212,3 @@ def _tensor_scatter_add_inplace_gfx1010(self, dim, index, src):
 torch.scatter_add = _torch_scatter_add_gfx1010
 torch.Tensor.scatter_add = _tensor_scatter_add_gfx1010
 torch.Tensor.scatter_add_ = _tensor_scatter_add_inplace_gfx1010
-
-# ── LSTM / GRU (MIOpen CK JIT fails on gfx1010) ──────────────────────────────
-# MIOpen's composable_kernel JIT path for RNN doesn't recognise gfx1010 and
-# raises a compile error.  Disabling cudnn makes PyTorch fall back to its own
-# pure-HIP RNN implementation which compiles correctly for gfx1010.
-torch.backends.cudnn.enabled = False
