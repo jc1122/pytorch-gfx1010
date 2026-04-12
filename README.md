@@ -35,8 +35,8 @@ matmul, Conv2d, LayerNorm, GroupNorm, attention, AdamW — all work out of the b
 After install, user code does not need to import anything extra.
 
 This is not a hardware limitation — all required arithmetic works on gfx1010. The remaining
-problems are mostly rocPRIM selection/sort gaps for gfx1010, and the installed workarounds
-patch those paths automatically inside the Python environment.
+known gap is mostly the rocPRIM sort path used by `torch.unique`; the installed workaround
+patches that path automatically inside the Python environment.
 
 ---
 
@@ -66,7 +66,8 @@ For matmul support (rocBLAS), see the companion repo: [rocblas-gfx1010](https://
 | LayerNorm, GroupNorm | OK | |
 | scaled_dot_product_attention | OK | |
 | AdamW / SGD optimizer step | OK | |
-| nonzero / masked_select / bool indexing / unique / tensor repr | AUTO-WORKAROUND | CPU fallback, result moved back to CUDA |
+| nonzero / masked_select / bool indexing / tensor repr | NATIVE PATCH | gfx1010 uses an ordered native GPU compaction path instead of broken hipcub `DeviceSelect::Flagged` |
+| unique | AUTO-WORKAROUND | CPU fallback, result moved back to CUDA |
 | scatter_add / PyG sum+mean aggregation | NATIVE PATCH | Common `dim=0` path uses compiled GPU `index_add_`; unsupported layouts still fall back through the Python workaround |
 | LSTM / GRU | NATIVE PATCH | gfx1010 skips broken MIOpen RNN JIT and uses PyTorch's native GPU implementation |
 | BatchNorm2d forward / inference | OK | |
@@ -94,16 +95,15 @@ from workarounds.batchnorm_gfx1010 import BatchNorm2dGFX1010 as BatchNorm2d
 That hook waits for `torch` to be imported, then automatically imports `workarounds` to
 patch the known gfx1010 failure paths:
 
-- `torch.nonzero`
-- `torch.masked_select`
-- boolean tensor indexing
-- tensor `repr`
 - `torch.unique`
 - unsupported `torch.scatter_add` / `Tensor.scatter_add[_]` layouts
 
 The native `scatter_add` patch routes the common PyG `dim=0` aggregation shape
 through compiled GPU `index_add_`, which works on gfx1010. The Python workaround
 still keeps a CPU fallback for unsupported scatter layouts.
+
+`nonzero`, unary `where(mask)`, `masked_select`, CUDA boolean indexing, and tensor repr are
+now handled by the native PyTorch nonzero compaction patch.
 
 ## Build instructions
 
@@ -117,6 +117,7 @@ git -C pytorch submodule update --init --recursive
 patch -p1 -d pytorch/third_party/composable_kernel < patches/composable_kernel-gfx1010.patch
 patch -p1 -d pytorch < patches/pytorch-scatter-add-gfx1010.patch
 patch -p1 -d pytorch < patches/pytorch-bn-rnn-gfx1010.patch
+patch -p1 -d pytorch < patches/pytorch-nonzero-gfx1010.patch
 
 # 3. Create venv and build
 python3 -m venv .venv
@@ -152,3 +153,11 @@ On ROCm gfx1010 only, BatchNorm backend selection skips MIOpen and uses PyTorch'
 BatchNorm kernels. RNN dispatch also skips MIOpen for LSTM/GRU/RNN so PyTorch's native GPU
 implementation runs with `torch.backends.cudnn.enabled` left enabled. Other ROCm GPU
 architectures are unchanged.
+
+### PyTorch nonzero compaction -- `aten/src/ATen/native/cuda/Nonzero.cu`
+
+On ROCm gfx1010 only, dynamic `nonzero` first counts nonzero elements with a small native
+kernel, then writes indices through PyTorch's existing ordered block-scan `flag_kernel`.
+This avoids the broken hipcub `DeviceSelect::Flagged` path while preserving PyTorch's index
+ordering. `torch.where(mask)`, `masked_select`, CUDA boolean indexing, and tensor repr now
+run without Python CPU fallbacks.

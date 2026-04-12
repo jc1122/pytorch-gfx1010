@@ -176,10 +176,9 @@ def test_adamw_step():
     opt.step()
 
 
-# ── workaround patches (requires workarounds) ─────────────────────────────────
+# ── native gfx1010 patches ────────────────────────────────────────────────────
 
 def test_nonzero():
-    import workarounds  # noqa: F401
     a = torch.tensor([0., 1., 0., 2.], device=DEVICE)
     idx = torch.nonzero(a)
     assert idx.shape == (2, 1)
@@ -187,7 +186,6 @@ def test_nonzero():
 
 
 def test_masked_select():
-    import workarounds  # noqa: F401
     a = torch.tensor([1., -1., 2., -2.], device=DEVICE)
     mask = torch.tensor([True, False, True, False], device=DEVICE)
     result = torch.masked_select(a, mask)
@@ -196,7 +194,6 @@ def test_masked_select():
 
 
 def test_boolean_indexing():
-    import workarounds  # noqa: F401
     # Direct
     a = torch.tensor([1., -1., 2., -2.], device=DEVICE)
     result = a[a > 0]
@@ -213,11 +210,12 @@ def test_boolean_indexing():
 
 
 def test_tensor_repr():
-    import workarounds  # noqa: F401
     a = torch.tensor([1., 2., 3.], device=DEVICE)
     s = repr(a)
     assert "cuda" in s, f"device not in repr: {s}"
 
+
+# ── workaround patches (requires workarounds) ─────────────────────────────────
 
 def test_unique():
     import workarounds  # noqa: F401
