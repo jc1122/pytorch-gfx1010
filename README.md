@@ -34,9 +34,9 @@ matmul, Conv2d, LayerNorm, GroupNorm, attention, AdamW — all work out of the b
 
 After install, user code does not need to import anything extra.
 
-This is not a hardware limitation — all required arithmetic works on gfx1010. The remaining
-known gap is mostly the rocPRIM sort path used by `torch.unique`; the installed workaround
-patches that path automatically inside the Python environment.
+This is not a hardware limitation -- all required arithmetic works on gfx1010. The remaining
+runtime workaround is limited to unsupported `scatter_add` layouts; common training paths are
+handled by native PyTorch or rocBLAS patches.
 
 ---
 
@@ -67,7 +67,7 @@ For matmul support (rocBLAS), see the companion repo: [rocblas-gfx1010](https://
 | scaled_dot_product_attention | OK | |
 | AdamW / SGD optimizer step | OK | |
 | nonzero / masked_select / bool indexing / tensor repr | NATIVE PATCH | gfx1010 uses an ordered native GPU compaction path instead of broken hipcub `DeviceSelect::Flagged` |
-| unique | AUTO-WORKAROUND | CPU fallback, result moved back to CUDA |
+| unique / unique_consecutive | NATIVE PATCH | gfx1010 uses CUDA/HIP sort plus native nonzero compaction; avoids broken hipcub unique/run-length encode and prefix scan |
 | scatter_add / PyG sum+mean aggregation | NATIVE PATCH | Common `dim=0` path uses compiled GPU `index_add_`; unsupported layouts still fall back through the Python workaround |
 | LSTM / GRU | NATIVE PATCH | gfx1010 skips broken MIOpen RNN JIT and uses PyTorch's native GPU implementation |
 | BatchNorm2d forward / inference | OK | |
@@ -95,7 +95,6 @@ from workarounds.batchnorm_gfx1010 import BatchNorm2dGFX1010 as BatchNorm2d
 That hook waits for `torch` to be imported, then automatically imports `workarounds` to
 patch the known gfx1010 failure paths:
 
-- `torch.unique`
 - unsupported `torch.scatter_add` / `Tensor.scatter_add[_]` layouts
 
 The native `scatter_add` patch routes the common PyG `dim=0` aggregation shape
@@ -103,7 +102,8 @@ through compiled GPU `index_add_`, which works on gfx1010. The Python workaround
 still keeps a CPU fallback for unsupported scatter layouts.
 
 `nonzero`, unary `where(mask)`, `masked_select`, CUDA boolean indexing, and tensor repr are
-now handled by the native PyTorch nonzero compaction patch.
+now handled by the native PyTorch nonzero compaction patch. `unique` and
+`unique_consecutive`, including `dim=...`, are handled by the native PyTorch unique patch.
 
 ## Build instructions
 
@@ -118,6 +118,7 @@ patch -p1 -d pytorch/third_party/composable_kernel < patches/composable_kernel-g
 patch -p1 -d pytorch < patches/pytorch-scatter-add-gfx1010.patch
 patch -p1 -d pytorch < patches/pytorch-bn-rnn-gfx1010.patch
 patch -p1 -d pytorch < patches/pytorch-nonzero-gfx1010.patch
+patch -p1 -d pytorch < patches/pytorch-unique-gfx1010.patch
 
 # 3. Create venv and build
 python3 -m venv .venv
@@ -161,3 +162,15 @@ kernel, then writes indices through PyTorch's existing ordered block-scan `flag_
 This avoids the broken hipcub `DeviceSelect::Flagged` path while preserving PyTorch's index
 ordering. `torch.where(mask)`, `masked_select`, CUDA boolean indexing, and tensor repr now
 run without Python CPU fallbacks.
+
+### PyTorch unique -- `aten/src/ATen/native/cuda/UniqueCub.cu`, `aten/src/ATen/native/cuda/Unique.cu`
+
+On ROCm gfx1010 only, 1-D `unique` and `unique_consecutive` avoid the broken hipcub
+unique/run-length encode and prefix-scan path. Non-consecutive unique still uses native
+CUDA/HIP sort, then compacts first-of-run positions with the native nonzero patch, computes
+inverse indices by binary searching the unique-start positions, and computes counts with a
+small kernel. This keeps results on the GPU without the old Python CPU fallback.
+
+For `unique(dim=...)` and `unique_consecutive(dim=...)`, the patch keeps PyTorch's existing
+row sort/order logic, then uses row-compare flags plus native nonzero compaction to select
+unique rows. Other ROCm GPU architectures and CUDA builds are unchanged.

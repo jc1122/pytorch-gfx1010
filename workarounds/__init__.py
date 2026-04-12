@@ -6,45 +6,15 @@ Import this module to automatically apply all gfx1010 workarounds:
     import workarounds
 
 Currently patches:
-- torch.unique / Tensor.unique -> CPU fallback
-  (same rocprim kernel issue; radix-sort / scan path hits missing gfx1010 binary)
-
 - torch.scatter_add / Tensor.scatter_add[_] -> GPU index_add_ substitute
   keeps unsupported scatter layouts on a CPU fallback
   (the common PyG dim-0 path is handled by the native PyTorch gfx1010 patch)
 
-nonzero, masked_select, boolean indexing, tensor repr, BatchNorm2d, and LSTM/GRU
-are handled by native PyTorch gfx1010 dispatch/kernel patches.
+nonzero, masked_select, boolean indexing, tensor repr, unique,
+unique_consecutive, BatchNorm2d, and LSTM/GRU are handled by native PyTorch
+gfx1010 dispatch/kernel patches.
 """
 import torch
-
-# ── unique ────────────────────────────────────────────────────────────────────
-# torch.unique uses a radix-sort/scan path via rocprim; same missing gfx1010
-# kernel binary.  CPU fallback, result moved back to original device.
-
-_orig_unique = torch.unique
-
-def _unique_gfx1010(input, sorted=True, return_inverse=False, return_counts=False, dim=None):
-    if input.is_cuda:
-        result = _orig_unique(input.cpu(), sorted=sorted,
-                              return_inverse=return_inverse,
-                              return_counts=return_counts,
-                              dim=dim)
-        if isinstance(result, tuple):
-            return tuple(t.to(input.device) for t in result)
-        return result.to(input.device)
-    return _orig_unique(input, sorted=sorted, return_inverse=return_inverse,
-                        return_counts=return_counts, dim=dim)
-
-torch.unique = _unique_gfx1010
-
-_orig_tensor_unique = torch.Tensor.unique
-
-def _tensor_unique_gfx1010(self, sorted=True, return_inverse=False, return_counts=False, dim=None):
-    return _unique_gfx1010(self, sorted=sorted, return_inverse=return_inverse,
-                           return_counts=return_counts, dim=dim)
-
-torch.Tensor.unique = _tensor_unique_gfx1010
 
 # ── scatter_add ───────────────────────────────────────────────────────────────
 # PyG aggregation uses Tensor.scatter_add_ for mean/sum reductions. The common

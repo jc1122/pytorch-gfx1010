@@ -215,18 +215,35 @@ def test_tensor_repr():
     assert "cuda" in s, f"device not in repr: {s}"
 
 
-# ── workaround patches (requires workarounds) ─────────────────────────────────
-
 def test_unique():
-    import workarounds  # noqa: F401
     a = torch.tensor([3., 1., 2., 1., 3.], device=DEVICE)
-    u = torch.unique(a, sorted=True)
+    u, inv, counts = torch.unique(a, sorted=True, return_inverse=True, return_counts=True)
     assert u.tolist() == [1.0, 2.0, 3.0]
+    assert inv.tolist() == [2, 0, 1, 0, 2]
+    assert counts.tolist() == [2, 1, 2]
     assert u.device.type == "cuda"
 
+    uc, invc, countsc = torch.unique_consecutive(
+        torch.tensor([1, 1, 2, 1], device=DEVICE),
+        return_inverse=True,
+        return_counts=True,
+    )
+    assert uc.tolist() == [1, 2, 1]
+    assert invc.tolist() == [0, 0, 1, 2]
+    assert countsc.tolist() == [2, 1, 1]
+    assert uc.device.type == "cuda"
+
+    b = torch.tensor([[1, 2], [1, 2], [3, 4]], device=DEVICE)
+    u2, inv2, counts2 = torch.unique(b, dim=0, return_inverse=True, return_counts=True)
+    assert u2.tolist() == [[1, 2], [3, 4]]
+    assert inv2.tolist() == [0, 0, 1]
+    assert counts2.tolist() == [2, 1]
+    assert u2.device.type == "cuda"
+
+
+# ── native RNN patch ──────────────────────────────────────────────────────────
 
 def test_lstm():
-    import workarounds  # noqa: F401
     lstm = nn.LSTM(input_size=16, hidden_size=32, num_layers=1, batch_first=True).to(DEVICE)
     x = torch.randn(4, 10, 16, device=DEVICE)
     out, (h, c) = lstm(x)
@@ -237,7 +254,6 @@ def test_lstm():
 
 
 def test_gru():
-    import workarounds  # noqa: F401
     gru = nn.GRU(input_size=16, hidden_size=32, num_layers=1, batch_first=True).to(DEVICE)
     x = torch.randn(4, 10, 16, device=DEVICE)
     out, h = gru(x)
