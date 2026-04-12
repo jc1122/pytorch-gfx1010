@@ -118,6 +118,7 @@ git -C pytorch submodule update --init --recursive
 
 # 2. Apply patches
 patch -p1 -d pytorch/third_party/composable_kernel < patches/composable_kernel-gfx1010.patch
+patch -p1 -d pytorch < patches/pytorch-scatter-add-gfx1010.patch
 
 # 3. Create venv and build
 python3 -m venv .venv
@@ -138,3 +139,11 @@ bash build.sh
 2. **FMA instruction**: Added a separate `__gfx101__` case that only defines `CK_USE_AMD_V_FMAC_F32`.
    gfx1010 supports `v_fmac_f32` but does **not** support dot product instructions
    (`dot1-insts`, `dot10-insts`) -- those are RDNA2+ only.
+
+### PyTorch scatter_add -- `aten/src/ATen/native/cuda/ScatterGatherKernel.cu`
+
+The native PyTorch patch keeps the workaround in compiled code instead of the Python startup
+hook. On ROCm gfx1010 only, the common PyG `dim=0` scatter-add shape is routed through
+`index_add_`, which runs on the GPU and avoids the failing generic HIP scatter kernel.
+Unsupported scatter layouts fall through to PyTorch's existing implementation. CUDA builds and
+other ROCm GPU architectures are unchanged.
