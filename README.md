@@ -34,9 +34,8 @@ matmul, Conv2d, LayerNorm, GroupNorm, attention, AdamW — all work out of the b
 
 After install, user code does not need to import anything extra.
 
-This is not a hardware limitation -- all required arithmetic works on gfx1010. The remaining
-runtime workaround is limited to unsupported `scatter_add` layouts; common training paths are
-handled by native PyTorch or rocBLAS patches.
+This is not a hardware limitation -- all required arithmetic works on gfx1010. All known
+failure paths are handled by native PyTorch patches compiled into the wheel.
 
 ---
 
@@ -68,7 +67,7 @@ For matmul support (rocBLAS), see the companion repo: [rocblas-gfx1010](https://
 | AdamW / SGD optimizer step | OK | |
 | nonzero / masked_select / bool indexing / tensor repr | NATIVE PATCH | gfx1010 uses an ordered native GPU compaction path instead of broken hipcub `DeviceSelect::Flagged` |
 | unique / unique_consecutive | NATIVE PATCH | gfx1010 uses CUDA/HIP sort plus native nonzero compaction; avoids broken hipcub unique/run-length encode and prefix scan |
-| scatter_add / PyG sum+mean aggregation | NATIVE PATCH | Common `dim=0` path uses compiled GPU `index_add_`; unsupported layouts still fall back through the Python workaround |
+| scatter_add / PyG sum+mean aggregation | NATIVE PATCH | All layouts work natively; common `dim=0` path is also optimised via compiled GPU `index_add_` |
 | LSTM / GRU | NATIVE PATCH | gfx1010 skips broken MIOpen RNN JIT and uses PyTorch's native GPU implementation |
 | BatchNorm2d forward / inference | OK | |
 | BatchNorm2d backward (training) | NATIVE PATCH | gfx1010 skips broken MIOpen BN kernels and uses PyTorch's native GPU implementation |
@@ -92,18 +91,14 @@ from workarounds.batchnorm_gfx1010 import BatchNorm2dGFX1010 as BatchNorm2d
 ## Automatic runtime patching
 
 `install.sh` drops a small `.pth` startup hook into the target venv's `site-packages`.
-That hook waits for `torch` to be imported, then automatically imports `workarounds` to
-patch the known gfx1010 failure paths:
+All known gfx1010 failure paths are now handled by native PyTorch patches compiled into
+the wheel — there is nothing left to monkey-patch at import time.
 
-- unsupported `torch.scatter_add` / `Tensor.scatter_add[_]` layouts
-
-The native `scatter_add` patch routes the common PyG `dim=0` aggregation shape
-through compiled GPU `index_add_`, which works on gfx1010. The Python workaround
-still keeps a CPU fallback for unsupported scatter layouts.
-
-`nonzero`, unary `where(mask)`, `masked_select`, CUDA boolean indexing, and tensor repr are
-now handled by the native PyTorch nonzero compaction patch. `unique` and
-`unique_consecutive`, including `dim=...`, are handled by the native PyTorch unique patch.
+`nonzero`, `where(mask)`, `masked_select`, CUDA boolean indexing, and tensor repr use the
+native nonzero compaction patch. `unique` and `unique_consecutive` (including `dim=...`)
+use the native unique patch. `scatter_add` in all layouts works via the native CUDA kernel;
+the common PyG `dim=0` path is also optimised through `index_add_`. `BatchNorm2d` and
+`LSTM`/`GRU` skip broken MIOpen paths via native dispatch patches.
 
 ## Build instructions
 
@@ -142,11 +137,12 @@ bash build.sh
 
 ### PyTorch scatter_add -- `aten/src/ATen/native/cuda/ScatterGatherKernel.cu`
 
-The native PyTorch patch keeps the workaround in compiled code instead of the Python startup
-hook. On ROCm gfx1010 only, the common PyG `dim=0` scatter-add shape is routed through
-`index_add_`, which runs on the GPU and avoids the failing generic HIP scatter kernel.
-Unsupported scatter layouts fall through to PyTorch's existing implementation. CUDA builds and
-other ROCm GPU architectures are unchanged.
+PyTorch's `scatter_add_cuda_kernel` uses `gpuAtomicAdd` directly and never touches
+rocprim/hipcub device algorithms, so all scatter layouts work on gfx1010 without any
+workaround. The patch is a performance optimisation: on ROCm gfx1010 only, the common PyG
+`dim=0` scatter-add shape (contiguous broadcast index, matching trailing dimensions) is
+routed through `index_add_`. Other shapes, CUDA builds, and other ROCm architectures are
+unchanged.
 
 ### PyTorch BatchNorm and RNN dispatch -- `aten/src/ATen/native/Normalization.cpp`, `aten/src/ATen/native/RNN.cpp`
 

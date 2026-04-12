@@ -241,6 +241,52 @@ def test_unique():
     assert u2.device.type == "cuda"
 
 
+# ── scatter_add (all layouts native) ─────────────────────────────────────────
+
+def test_scatter_add_dim0():
+    # standard 2D dim=0 aggregation
+    out = torch.zeros(4, 3, device=DEVICE).scatter_add(
+        0,
+        torch.tensor([[0, 1, 2], [1, 2, 3]], device=DEVICE),
+        torch.ones(2, 3, device=DEVICE),
+    )
+    assert out.shape == (4, 3)
+    assert out.device.type == "cuda"
+
+
+def test_scatter_add_dim1():
+    out = torch.zeros(3, 4, device=DEVICE).scatter_add(
+        1,
+        torch.tensor([[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]], device=DEVICE),
+        torch.ones(3, 4, device=DEVICE),
+    )
+    assert out.shape == (3, 4)
+    assert out.device.type == "cuda"
+
+
+def test_scatter_add_inplace():
+    out = torch.zeros(3, 4, device=DEVICE)
+    out.scatter_add_(
+        1,
+        torch.tensor([[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]], device=DEVICE),
+        torch.ones(3, 4, device=DEVICE),
+    )
+    assert out.shape == (3, 4)
+    assert out.device.type == "cuda"
+
+
+def test_scatter_add_pyg_style():
+    # PyG MessagePassing aggregation: scatter node features along edge_index
+    N, E, F = 10, 30, 16
+    edge_index = torch.randint(0, N, (2, E), device=DEVICE)
+    x = torch.randn(N, F, device=DEVICE)
+    src_feats = x[edge_index[0]]
+    idx = edge_index[1].unsqueeze(1).expand(-1, F)
+    out = torch.zeros(N, F, device=DEVICE).scatter_add(0, idx, src_feats)
+    assert out.shape == (N, F)
+    assert out.device.type == "cuda"
+
+
 # ── native RNN patch ──────────────────────────────────────────────────────────
 
 def test_lstm():
@@ -286,6 +332,10 @@ ALL_TESTS = [
     test_boolean_indexing,
     test_tensor_repr,
     test_unique,
+    test_scatter_add_dim0,
+    test_scatter_add_dim1,
+    test_scatter_add_inplace,
+    test_scatter_add_pyg_style,
     test_lstm,
     test_gru,
 ]

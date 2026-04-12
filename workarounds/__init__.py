@@ -1,87 +1,10 @@
 """
 workarounds/__init__.py
 
-Import this module to automatically apply all gfx1010 workarounds:
+All gfx1010 failure paths are now handled by native PyTorch patches compiled
+into the wheel.  Nothing needs to be monkey-patched at import time.
 
-    import workarounds
+The batchnorm_gfx1010 module is kept for manual drop-in use only:
 
-Currently patches:
-- torch.scatter_add / Tensor.scatter_add[_] -> GPU index_add_ substitute
-  keeps unsupported scatter layouts on a CPU fallback
-  (the common PyG dim-0 path is handled by the native PyTorch gfx1010 patch)
-
-nonzero, masked_select, boolean indexing, tensor repr, unique,
-unique_consecutive, BatchNorm2d, and LSTM/GRU are handled by native PyTorch
-gfx1010 dispatch/kernel patches.
+    from workarounds.batchnorm_gfx1010 import BatchNorm2dGFX1010 as BatchNorm2d
 """
-import torch
-
-# ── scatter_add ───────────────────────────────────────────────────────────────
-# PyG aggregation uses Tensor.scatter_add_ for mean/sum reductions. The common
-# dim-0 reduction shape is handled by the native PyTorch gfx1010 patch. Keep a
-# CPU fallback for less common scatter layouts that still hit the generic kernel.
-
-_orig_scatter_add = torch.scatter_add
-_orig_tensor_scatter_add = torch.Tensor.scatter_add
-_orig_tensor_scatter_add_ = torch.Tensor.scatter_add_
-
-def _scatter_add_args_to_cpu(input, index, src):
-    return input.cpu(), index.cpu() if index.is_cuda else index, src.cpu() if src.is_cuda else src
-
-def _scatter_add_index_for_dim0(index, src):
-    if index.dim() == 1:
-        return index
-    if index.dim() != src.dim():
-        return None
-    if index.size(0) != src.size(0):
-        return None
-    if any(size == 0 for size in index.shape[1:]):
-        return None
-    if any(stride != 0 for stride in index.stride()[1:]):
-        return None
-    return index[(slice(None),) + (0,) * (index.dim() - 1)]
-
-def _is_native_gfx1010_scatter_add_path(input, dim, index, src):
-    dim = input.dim() + dim if dim < 0 else dim
-    if dim != 0:
-        return False
-    if input.dim() != src.dim():
-        return False
-    if input.shape[1:] != src.shape[1:]:
-        return False
-    return _scatter_add_index_for_dim0(index, src) is not None
-
-def _torch_scatter_add_gfx1010(input, dim, index, src, *, out=None):
-    if input.is_cuda:
-        if _is_native_gfx1010_scatter_add_path(input, dim, index, src):
-            return _orig_scatter_add(input, dim, index, src, out=out)
-        cpu_input, cpu_index, cpu_src = _scatter_add_args_to_cpu(input, index, src)
-        result = _orig_scatter_add(cpu_input, dim, cpu_index, cpu_src)
-        result = result.to(input.device)
-        if out is not None:
-            out.copy_(result)
-            return out
-        return result
-    return _orig_scatter_add(input, dim, index, src, out=out)
-
-def _tensor_scatter_add_gfx1010(self, dim, index, src):
-    if self.is_cuda:
-        if _is_native_gfx1010_scatter_add_path(self, dim, index, src):
-            return _orig_tensor_scatter_add(self, dim, index, src)
-        cpu_self, cpu_index, cpu_src = _scatter_add_args_to_cpu(self, index, src)
-        return _orig_tensor_scatter_add(cpu_self, dim, cpu_index, cpu_src).to(self.device)
-    return _orig_tensor_scatter_add(self, dim, index, src)
-
-def _tensor_scatter_add_inplace_gfx1010(self, dim, index, src):
-    if self.is_cuda:
-        if _is_native_gfx1010_scatter_add_path(self, dim, index, src):
-            return _orig_tensor_scatter_add_(self, dim, index, src)
-        cpu_self, cpu_index, cpu_src = _scatter_add_args_to_cpu(self, index, src)
-        result = _orig_tensor_scatter_add_(cpu_self, dim, cpu_index, cpu_src).to(self.device)
-        self.copy_(result)
-        return self
-    return _orig_tensor_scatter_add_(self, dim, index, src)
-
-torch.scatter_add = _torch_scatter_add_gfx1010
-torch.Tensor.scatter_add = _tensor_scatter_add_gfx1010
-torch.Tensor.scatter_add_ = _tensor_scatter_add_inplace_gfx1010
