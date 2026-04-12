@@ -67,6 +67,7 @@ For matmul support (rocBLAS), see the companion repo: [rocblas-gfx1010](https://
 | scaled_dot_product_attention | OK | |
 | AdamW / SGD optimizer step | OK | |
 | nonzero / masked_select / bool indexing / unique / tensor repr | AUTO-WORKAROUND | CPU fallback, result moved back to CUDA |
+| scatter_add / PyG sum+mean aggregation | TEMP WORKAROUND | Common `dim=0` path uses GPU `index_add_`; other layouts fall back to CPU. Native HIP kernel should be rebuilt later for performance |
 | LSTM / GRU | AUTO-WORKAROUND | Disables MIOpen/cudnn path so PyTorch fallback runs on gfx1010 |
 | BatchNorm2d forward / inference | OK | |
 | BatchNorm2d backward (training) | WORKAROUND | MIOpen BN backward uses DPP row_bcast:15/31, not valid on gfx1010 |
@@ -98,7 +99,14 @@ patch the known gfx1010 failure paths:
 - boolean tensor indexing
 - tensor `repr`
 - `torch.unique`
+- `torch.scatter_add` / `Tensor.scatter_add[_]` for PyG-style aggregation
 - `nn.LSTM` / `nn.GRU` by disabling the broken MIOpen RNN path
+
+The `scatter_add` patch is intentionally temporary. It routes the common PyG
+`dim=0` aggregation shape through GPU `index_add_`, which works on gfx1010, and
+keeps a CPU fallback for unsupported scatter layouts. For best performance, patch
+and rebuild PyTorch's native HIP scatter kernel later instead of relying on this
+Python-level workaround.
 
 ## Build instructions
 

@@ -23,6 +23,10 @@ Currently patches:
 - torch.unique / Tensor.unique -> CPU fallback
   (same rocprim kernel issue; radix-sort / scan path hits missing gfx1010 binary)
 
+- torch.scatter_add / Tensor.scatter_add[_] -> GPU index_add_ substitute
+  for common dim-0 reductions, CPU fallback otherwise
+  (native HIP scatter kernel can hit invalid-device-function on gfx1010)
+
 - torch.backends.cudnn.enabled = False  (applied at import time)
   (MIOpen's composable_kernel JIT compilation for LSTM/GRU fails on gfx1010:
   CK config.hpp doesn't recognise gfx1010, raises "Need to define (only) one GPU
@@ -149,6 +153,89 @@ def _tensor_unique_gfx1010(self, sorted=True, return_inverse=False, return_count
                            return_counts=return_counts, dim=dim)
 
 torch.Tensor.unique = _tensor_unique_gfx1010
+
+# ── scatter_add ───────────────────────────────────────────────────────────────
+# PyG aggregation uses Tensor.scatter_add_ for mean/sum reductions.  On gfx1010
+# the native HIP scatter kernel can fail with hipErrorInvalidDeviceFunction.
+# For the common PyG dim-0 reduction shape, route through index_add_, which
+# runs natively on gfx1010. Fall back to CPU for less common scatter layouts.
+
+_orig_scatter_add = torch.scatter_add
+_orig_tensor_scatter_add = torch.Tensor.scatter_add
+_orig_tensor_scatter_add_ = torch.Tensor.scatter_add_
+
+def _scatter_add_args_to_cpu(input, index, src):
+    return input.cpu(), index.cpu() if index.is_cuda else index, src.cpu() if src.is_cuda else src
+
+def _scatter_add_index_for_dim0(index, src):
+    if index.dim() == 1:
+        return index
+    if index.dim() != src.dim():
+        return None
+    if index.size(0) != src.size(0):
+        return None
+    if any(size == 0 for size in index.shape[1:]):
+        return None
+    if any(stride != 0 for stride in index.stride()[1:]):
+        return None
+    return index[(slice(None),) + (0,) * (index.dim() - 1)]
+
+def _scatter_add_via_index_add(input, dim, index, src):
+    dim = input.dim() + dim if dim < 0 else dim
+    if dim != 0:
+        return None
+    if input.dim() != src.dim():
+        return None
+    if input.shape[1:] != src.shape[1:]:
+        return None
+    index_1d = _scatter_add_index_for_dim0(index, src)
+    if index_1d is None:
+        return None
+    result = input.clone()
+    result.index_add_(0, index_1d, src)
+    return result
+
+def _torch_scatter_add_gfx1010(input, dim, index, src, *, out=None):
+    if input.is_cuda:
+        result = _scatter_add_via_index_add(input, dim, index, src)
+        if result is not None:
+            if out is not None:
+                out.copy_(result)
+                return out
+            return result
+        cpu_input, cpu_index, cpu_src = _scatter_add_args_to_cpu(input, index, src)
+        result = _orig_scatter_add(cpu_input, dim, cpu_index, cpu_src)
+        result = result.to(input.device)
+        if out is not None:
+            out.copy_(result)
+            return out
+        return result
+    return _orig_scatter_add(input, dim, index, src, out=out)
+
+def _tensor_scatter_add_gfx1010(self, dim, index, src):
+    if self.is_cuda:
+        result = _scatter_add_via_index_add(self, dim, index, src)
+        if result is not None:
+            return result
+        cpu_self, cpu_index, cpu_src = _scatter_add_args_to_cpu(self, index, src)
+        return _orig_tensor_scatter_add(cpu_self, dim, cpu_index, cpu_src).to(self.device)
+    return _orig_tensor_scatter_add(self, dim, index, src)
+
+def _tensor_scatter_add_inplace_gfx1010(self, dim, index, src):
+    if self.is_cuda:
+        result = _scatter_add_via_index_add(self, dim, index, src)
+        if result is not None:
+            self.copy_(result)
+            return self
+        cpu_self, cpu_index, cpu_src = _scatter_add_args_to_cpu(self, index, src)
+        result = _orig_tensor_scatter_add_(cpu_self, dim, cpu_index, cpu_src).to(self.device)
+        self.copy_(result)
+        return self
+    return _orig_tensor_scatter_add_(self, dim, index, src)
+
+torch.scatter_add = _torch_scatter_add_gfx1010
+torch.Tensor.scatter_add = _tensor_scatter_add_gfx1010
+torch.Tensor.scatter_add_ = _tensor_scatter_add_inplace_gfx1010
 
 # ── LSTM / GRU (MIOpen CK JIT fails on gfx1010) ──────────────────────────────
 # MIOpen's composable_kernel JIT path for RNN doesn't recognise gfx1010 and
